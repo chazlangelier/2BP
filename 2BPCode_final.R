@@ -1,7 +1,6 @@
 #COVID TwoBP - TA RNAseq
 #October 11 2023 
 
-
 #####Section 1 - makes figures 2, 3, and 4 
 library(limma)
 library(dplyr)
@@ -26,7 +25,7 @@ bacterial_mass_filt <- read.csv("Analyzed_samples.csv")
 ### PART 1: Generating FIGURE 3 (descriptive) depicting rank at trach aspirates over time  
 ## Read in sample and patient metadata 
 TA_TwoBP_samples <- TA_samples %>%
-  filter(Final == "2BP-culture pos")
+  filter(Final == "2BP")
 
 #Read in all genus level data and filter out contaminants
 contaminants <- c("Sphingomonas", "Bradyrhizobium", "Ralstonia", "Delftia", 
@@ -52,11 +51,11 @@ genus_TA_TwoBP <- genus_TA_TwoBP_1 %>%
 
 #Merge on COMET ID and genus combo, so we're only keeping rows from microbe reports that are the cultured pathogen 
 genus_TA_TwoBP_pathogen <- genus_TA_TwoBP %>%
-  inner_join(culture_results[, c(1,6)], by = c("comet_id" = "patient_id", "name" = "PNAOrg_genus"))
+  inner_join(culture_results[, c(1,5)], by = c("comet_id" = "patient_id", "name" = "PNAOrg_genus"))
 
 #Merge with TA sample list and add zeros when there was no result 
 genus_TA_TwoBP_pathogen <- genus_TA_TwoBP_pathogen %>%
-  right_join(TA_TwoBP_samples[, c(1, 2, 3, 4, 14, 15)], by = c("sample_name" = "dl_id", "comet_id" = "comet_id")) %>%
+  right_join(TA_TwoBP_samples[, c(1, 2, 3, 4, 5)], by = c("sample_name" = "dl_id", "comet_id" = "comet_id")) %>%
   tidyr::replace_na(list(nt_rpm=0)) %>%
   tidyr::replace_na(list(rank=200)) 
 
@@ -154,7 +153,7 @@ write.csv(TA_samples_alpha_longitudinal, "TA_samples_alpha_longitudinal.csv")
 ###For Figure 2C - comparing alpha diversity between samples with cultured pathogen at highest rank vs controls
 ###Select the samples with the cultured pathogen at highest rank - note, that this INCLUDES
 #the samples with multiple cultured pathogens as multiple pathogens 
-best_TA_path <- genus_TA_TwoBP_pathogen[, c(1, 2, 5, 12, 13, 36, 37, 38, 39, 40, 41, 42, 43)] %>%
+best_TA_path <- genus_TA_TwoBP_pathogen[, c(1, 2, 5, 12, 13, 36, 37, 38, 39, 40, 41, 42)] %>%
   filter(sample_to_2BP <= 2 & sample_to_2BP >= -3) %>%
   group_by(comet_id) %>%
   dplyr::slice(which.min(rank)) 
@@ -166,11 +165,11 @@ best_TA_path_1<- best_TA_path_1 %>% filter(comet_id != "1250_2")
 best_TA_path_1<- best_TA_path_1 %>% filter(comet_id != "1474_2")          
 
 ##Add the control samples 
-timepointcontrols<-TA_samples_timepoint %>% filter(Final == "No-PNA")
+timepointcontrols<-TA_samples_timepoint %>% filter(Final == "No-BP")
 best_TA_path_1$Final<- NA
 #best_TA_path_1 <-best_TA_path_1 %>% rename( "dl_id"= "sample_name" )
 best_TA_path_1$dl_id<-best_TA_path_1$sample_name
-TA_samples_toprank_timepoint<-rbind(timepointcontrols[, c(2,3,12)], best_TA_path_1[,c(7,15,14)])
+TA_samples_toprank_timepoint<-rbind(timepointcontrols[, c(1, 2,3,4,6)], best_TA_path_1[,c(7,13,9,10,11)])
 TA_samples_alpha_topranked_timepoint<- merge(TA_samples_alpha, TA_samples_toprank_timepoint, by.x="sample_name", by.y="dl_id", all.x=FALSE, all.y=TRUE)
 wilcox.test(alpha_diversity ~ Final.x, data = TA_samples_alpha_topranked_timepoint)
 ggplot(TA_samples_alpha_topranked_timepoint, aes(x=Final.x, y = alpha_diversity)) + geom_boxplot() + geom_jitter(width = 0.25) + theme_bw()     
@@ -286,15 +285,15 @@ write.csv(NS_samples_alpha, "NS_samples_alpha_timepoint.csv")
 ##For FIgure 4D, create a timecourse file of this with rank of culture-confirmed pathogen over time (this will be figure 4D)
 #Filter available nasal swab samples for TwoBP patients from samples that past host/bacterial QC 
 #NS_TwoBP_samples_filt <- read.csv("NS_samples_postbacterialQC_longitudinal.csv") %>%  # 
-#  filter(Final == "TwoBP-culture pos")
+#  filter(Final == "TwoBP")
   NS_TwoBP_samples_filt <- NS_samples %>%  # 
-    filter(Final == "2BP-culture pos")
+    filter(Final == "2BP")
 #Filter genus-level data for NS samples from culture+ TwoBP patients 
 #Only keep samples that passed QC --> left with 15 TwoBP patients
 genus_NS_TwoBP <- genus_microbe_reports %>%
   filter(sample_name %in% NS_TwoBP_samples_filt$dl_id) %>% 
   filter(category == "bacteria") %>%
-  left_join(NS_TwoBP_samples_filt[, c(1, 2, 3,4, 14,15)], by = c("sample_name" = "dl_id"))
+  left_join(NS_TwoBP_samples_filt[, c(1, 2, 3,4, 5,6)], by = c("sample_name" = "dl_id"))
 
 #Add rank # to genus (by rpm)
 genus_NS_TwoBP <- genus_NS_TwoBP %>%
@@ -306,7 +305,7 @@ genus_NS_TwoBP <- genus_NS_TwoBP %>%
 #Merge on COMET ID and pathogen name combo
 genus_NS_TwoBP$comet_id<-as.integer(genus_NS_TwoBP$comet_id)
 genus_NS_TwoBP_pathogen <- genus_NS_TwoBP %>%
-  inner_join(culture_results[, c(1,6)], by = c("comet_id" = "patient_id", "name" = "PNAOrg_genus"))
+  inner_join(culture_results[, c(1,5)], by = c("comet_id" = "patient_id", "name" = "PNAOrg_genus"))
 table(genus_NS_TwoBP_pathogen$rank)        
 #1233 drops out because there is no serratia detected in it at all, indicated as lower than limit of detection 
 
@@ -329,6 +328,7 @@ table(genus_NS_TwoBP_pathogen_fortable$rank_new)
 #Match all samples their rank - genus_TA_TwoBP_pathogen has the rank of the cultured pathogen in each patient at each timepoint 
 genus_NS_TwoBP_pathogen_timepoint <- genus_NS_TwoBP_pathogen_fortable %>% filter(sample_name %in% NS_samples_timepoint$dl_id)
 table(genus_NS_TwoBP_pathogen_timepoint$rank_new)
+
 
 ##Figure out of how many patients have the topranked pathogen in the 7 day window - figure 4C
 ##For 1233, the pathogen was never detected at all (hence >10)
@@ -384,7 +384,7 @@ genus_TA_TwoBP_pathogen$sample_type <- 1
 
 genus_NS_TwoBP_pathogen$comet_id<-as.character(genus_NS_TwoBP_pathogen$comet_id)
 genus_NS_TwoBP_pathogen$sample_type<-0
-all_samples <- rbind(genus_TA_TwoBP_pathogen[, c(1, 5, 12, 37, 42, 38,44)], genus_NS_TwoBP_pathogen[, c(2, 5, 12, 38, 41, 42,44)])
+all_samples <- rbind(genus_TA_TwoBP_pathogen[, c(1, 5, 12, 37, 42, 39,41, 38)], genus_NS_TwoBP_pathogen[, c(2, 5, 12, 37, 43,38,40, 42)])
 
 #Only include comet IDs that have NS data (13) OR 1233, which has a NS sample in which the bug is not detected
 all_samples <- all_samples %>%
@@ -407,4 +407,3 @@ ggplot(all_samples, aes(x = sample_to_2BP, y = rank_new, color = sample_type)) +
   scale_color_manual(values = c("mediumpurple", "#D41159")) +
   theme(panel.grid.minor = element_blank(), panel.background = element_blank()) +
   scale_x_continuous(breaks = c(-6, -4, -2, 0, 2, 4, 6), limits = c(-7, 7))
-
