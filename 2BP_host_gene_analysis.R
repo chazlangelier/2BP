@@ -27,10 +27,8 @@ metadata <- read.csv(
   "Inputs/TA_samples_postbacterialANDhostQC_timepoint.csv",
   row.names = 1
 )
-# Convert some columns to factor
-for (i in c("comet_id")) {
-  metadata[,i] <- as.factor(metadata[,i])
-}
+# Convert Final column to factor, keep No-BP as the reference level
+metadata$Final <- factor(metadata$Final, levels=c("No-BP","2BP"))
 
 # Check if there's any patient with multiple samples
 stopifnot(!any(duplicated(metadata$comet_id)))
