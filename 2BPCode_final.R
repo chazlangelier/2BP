@@ -407,3 +407,4 @@ ggplot(all_samples, aes(x = sample_to_2BP, y = rank_new, color = sample_type)) +
   scale_color_manual(values = c("mediumpurple", "#D41159")) +
   theme(panel.grid.minor = element_blank(), panel.background = element_blank()) +
   scale_x_continuous(breaks = c(-6, -4, -2, 0, 2, 4, 6), limits = c(-7, 7))
+
