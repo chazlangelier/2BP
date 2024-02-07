@@ -27,8 +27,10 @@ metadata <- read.csv(
   "Inputs/TA_samples_postbacterialANDhostQC_timepoint.csv",
   row.names = 1
 )
-# Convert Final column to factor, keep No-BP as the reference level
-metadata$Final <- factor(metadata$Final, levels=c("No-BP","2BP"))
+# Convert some columns to factor
+for (i in c("comet_id")) {
+  metadata[,i] <- as.factor(metadata[,i])
+}
 
 # Check if there's any patient with multiple samples
 stopifnot(!any(duplicated(metadata$comet_id)))
@@ -268,6 +270,126 @@ ggsave(
 data.table::fwrite(
   hallmark.gsea.sc2,
   file="gsea-hallmark_host_vs_nohost_covariate-viralload.tsv",
+  sep = "\t", sep2 = c("", " ", "")
+)
+
+## Covariate: viral load (steroid patients only) -----
+# Load steroid data
+steroid <- read.csv(
+  "Inputs/SupplementaryTable1B_InputData_011024.csv"
+)
+# Extract samples who received steroid
+steroid <- steroid %>%
+  subset(Steroid.days.before.collection>0)
+metadata.steroid <- metadata %>%
+  subset(comet_id %in% steroid$comet_id)
+
+design <- model.matrix(~ Final + log10(nt_rpm+1),
+                       data = metadata.steroid)
+print(colnames(design))
+colnames(design)[2] <- "VAP.pos"
+
+# limma-voom
+vwts <- voom(vap.counts[keep,metadata.steroid$dl_id], 
+             design = design,
+             normalize.method = "quantile",
+             plot = T) 
+vfit <- lmFit(vwts)
+vfit <- eBayes(vfit)
+VAP.DE.sc2.steroid <- topTable(
+  vfit,
+  coef = "VAP.pos", sort.by = "none", 
+  number = Inf)
+print("Effects of VAP on gene expression:")
+print(sprintf("Number of genes with FDR < 0.1: %d",
+              sum(VAP.DE.sc2.steroid$adj.P.Val<0.1)))
+
+# Add gene names
+VAP.DE.sc2.steroid$gene_name <- gene.names[rownames(VAP.DE.sc2.steroid), "gene_name"]
+
+# Export DE results
+write.csv(
+  VAP.DE.sc2.steroid,
+  "DE_VAP_vs_noVAP_steroid_covariate-viralload.csv"
+)
+
+### GSEA: Hallmark -----
+gene.ranks <- VAP.DE.sc2.steroid$t
+names(gene.ranks) <- rownames(VAP.DE.sc2.steroid)
+gene.ranks <- sort(gene.ranks, decreasing = TRUE)
+
+set.seed(1)
+hallmark.gsea.sc2.steroid <- fgseaMultilevel(
+  pathways = hallmark.list,
+  stats = gene.ranks,
+  minSize = 15,
+  maxSize = 500,
+  nproc = 1
+)
+
+# Select pathways
+my.pathways <- c(
+  "HALLMARK_IL2_STAT5_SIGNALING","HALLMARK_IL6_JAK_STAT3_SIGNALING",
+  "HALLMARK_INFLAMMATORY_RESPONSE","HALLMARK_INTERFERON_ALPHA_RESPONSE",
+  "HALLMARK_INTERFERON_GAMMA_RESPONSE","HALLMARK_TGF_BETA_SIGNALING",
+  "HALLMARK_TNFA_SIGNALING_VIA_NFKB"
+)
+tmp <- hallmark.gsea.sc2.steroid %>%
+  subset(pathway %in% my.pathways)
+# Fix pathway names
+tmp$pathway <- gsub(
+  "HALLMARK_","", tmp$pathway, fixed=TRUE
+)
+tmp$pathway <- gsub(
+  "_"," ", tmp$pathway, fixed=TRUE
+)
+tmp$pathway <- stringr::str_to_sentence(tmp$pathway)
+my.dict <- list("Il"="IL", "jak"="JAK", "stat"="STAT", "Tgf"="TGF",
+                "Tnfa"="TNFa", "nfkb"="NF-kB", "Interferon"="IFN")
+for (i in names(my.dict)) {
+  tmp$pathway <- gsub(i, my.dict[[i]], tmp$pathway, fixed=TRUE)
+}
+
+p3 <- ggplot(data=tmp,
+             aes(x=NES, 
+                 y=reorder(pathway,NES))) +
+  geom_col(aes(color=as.factor(NES>0)), fill="white", width=0.7) +
+  geom_col(data=. %>% subset(padj<0.05), aes(fill=as.factor(NES>0)), width=0.7) +
+  geom_vline(xintercept = 0, linewidth = 0.4, color = "black") +
+  geom_text(
+    data=. %>% subset(NES>0),
+    aes(x=0,label=sprintf("P = %.2g", padj)), 
+    hjust=1.07, size=3.4) +
+  geom_text(
+    data=. %>% subset(NES<0),
+    aes(x=0, label=sprintf("P = %.2g", padj)),
+    hjust=-0.07, size=3.4) +
+  scale_x_continuous(limits=c(-2,2), expand=c(0,0)) +
+  scale_color_manual(values=c("FALSE"="#1A85FF","TRUE"="#D41159")) +
+  scale_fill_manual(values=c("FALSE"="#1A85FF","TRUE"="#D41159")) +
+  labs(x="GSEA Normalized\nEnrichment Score", y="",
+       title="Pathways associated with 2BP\n(steroid recipients)") +
+  theme_bw() + theme(
+    plot.title = element_text(hjust = 0.5, size=12, face="plain"),
+    axis.text.x = element_text(size=11, color="black"),
+    axis.text.y = element_text(size=11, color="black"),
+    text = element_text(size=12, family="Arial"),
+    plot.margin = unit(c(0.5,1,0.5,0), "cm"),
+    panel.grid.minor=element_blank(),
+    # panel.grid.major.y = element_blank(),
+    panel.spacing = unit(0.5, "cm"),
+    legend.position = "none"
+  )
+ggsave(
+  "/Users/hoangvanphan/Library/CloudStorage/Box-Box/Van_research/20230301_COMET_VAP/manuscript/main_figures/bulk_vap-vs-novap_steroid_gsea-hallmark.svg",
+  plot=p3,
+  width=4.5, height=3.7, units="in"
+)
+
+# Export GSEA results
+data.table::fwrite(
+  hallmark.gsea.sc2.steroid,
+  file="gsea-hallmark_VAP_vs_noVAP_steroid_covariate-viralload.tsv",
   sep = "\t", sep2 = c("", " ", "")
 )
 
