@@ -1,0 +1,161 @@
+---
+title: "2BP microbial functional pathways"
+output: html_notebook
+---
+
+Here we compare the microbial pathways of 2BP vs No-BP patients.
+
+Reference: https://github.com/biobakery/biobakery/wiki/MaAsLin2
+
+# Load packages
+
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(patchwork)
+
+library(Maaslin2)
+```
+
+# Load data
+
+Load HUMAnN result.
+
+```{r}
+# Pathways
+df <- data.table::fread(
+  "Inputs_Final/humann_pathabundance_relab.tsv",
+  sep="\t",
+  header=TRUE,
+) %>%
+  as.data.frame()
+rownames(df) <- df[,"# Pathway"]
+```
+
+Load metadata.
+
+```{r}
+metadata <- read.csv(
+  "Inputs_Final/TA_samples_timepoint.csv"
+)
+
+# Relevel 2BP status
+metadata$TwoBP_Status <- factor(
+  metadata$TwoBP_Status,
+  levels=c("No-BP","2BP"))
+
+# Set rownames
+rownames(metadata) <- metadata$sample_name
+```
+
+Process the pathway file so that it matches with the metadata file, and remove
+stratified (ie, species-level) pathways.
+
+```{r}
+# Remove the suffix
+colnames(df) <- sapply(
+  colnames(df), FUN = function(x)
+    strsplit(x,"_",fixed=TRUE)[[1]][1]
+)
+
+# Retain certain samples
+df2 <- df[,metadata$sample_name]
+
+# Remove stratified pathways
+df2 <- df2[!grepl("\\|", rownames(df2)),]
+```
+
+# Analysis
+
+```{r}
+fit_func <- Maaslin2(
+  input_data      = df2,
+  input_metadata  = metadata, 
+  output          = "2BP_maaslin2", 
+  fixed_effects   = c("TwoBP_Status"),
+  reference       = c("TwoBP_Status,No-BP"),
+  min_abundance   = 0,
+  min_prevalence  = 0.2,
+  analysis_method = "LM",
+  normalization   = "NONE",
+  transform       = "LOG")
+```
+
+Process the MaAsLin2 output for plotting
+
+```{r}
+# All pathways
+pathway.res <- fit_func$results
+
+# Export
+write.csv(
+  pathway.res,
+  "MaAsLin2_2BP-vs-noBP.csv",
+  row.names=FALSE
+)
+
+# Pathways with FDR < 0.25
+pathway.plot <- pathway.res %>%
+  subset(qval<0.25) %>%
+  subset(!(feature %in% c("UNMAPPED","UNINTEGRATED")))
+```
+
+Clean up the pathways' names
+
+```{r}
+# Replace the first ".." with ":"
+# Remove the pathway ID, by splitting at the first 
+pathway.plot$pathway.name <- sub(
+  "..", ": ",
+  pathway.plot$feature,
+  fixed=TRUE)
+
+# Replace dot around PWY with hyphen
+pathway.plot$pathway.name <- gsub(
+  ".PWY", "-PWY",
+  pathway.plot$pathway.name,
+  fixed=TRUE)
+pathway.plot$pathway.name <- gsub(
+  "PWY.", "PWY-",
+  pathway.plot$pathway.name,
+  fixed=TRUE)
+
+# Replace remaining dots with space
+pathway.plot$pathway.name <- gsub(
+  "\\.+", " ",
+  pathway.plot$pathway.name)
+```
+
+Bar plot. The `coef` column is approximately log2(fold change): https://forum.biobakery.org/t/trying-to-understand-coef-column-and-how-to-convert-it-to-fold-change/3136/9
+
+```{r}
+p <- ggplot(data=pathway.plot,
+       aes(x=coef,
+           y=reorder(pathway.name,coef))) +
+  geom_col(fill="#D41159", width=0.6) +
+  geom_vline(xintercept = 0, linewidth = 0.4, color = "black") +
+  geom_text(
+    x=2,
+    aes(label=sprintf("Padj = %.2g", qval)),
+    hjust=-0.09, size=2.8) +
+  scale_x_continuous(limits=c(0,2), expand=c(0,0),
+                     breaks=c(0,1,2)) +
+  coord_cartesian(clip="off") +
+  labs(x="log2(fold change)", y="",
+       title="Microbial functional pathways\nassociated with 2BP") +
+  theme_bw() + theme(
+    plot.title = element_text(hjust = 0.5, size=10, face="plain"),
+    axis.text.x = element_text(size=10, color="black"),
+    axis.text.y = element_text(size=9, color="black"),
+    text = element_text(size=10, family="Arial"),
+    plot.margin = unit(c(0.5,2,0.5,0), "cm"),
+    panel.grid.minor=element_blank(),
+    legend.position = "none"
+  )
+ggsave(
+  "microbial_pathway_fdr0.25.svg",
+  plot=p,
+  width=7.5, height=5.5, units="in"
+)
+```
+

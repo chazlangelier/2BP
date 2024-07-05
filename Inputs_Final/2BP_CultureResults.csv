@@ -1,32 +1,32 @@
-patient_id,PNAOrg,Final,PNAOrg_final,PNAOrg_genus
-1047,MSSA,2BP-culture pos,Staphylococcus aureus,Staphylococcus
-1051,Pseudomonas aeruginosa,2BP-culture pos,Pseudomonas aeruginosa,Pseudomonas
-1114,Pseudomonas aeruginosa,2BP-culture pos,Pseudomonas aeruginosa,Pseudomonas
-1145,"Klebsiella pneumoniae, Escherichia coli, MRSA",2BP-culture pos,Klebsiella pneumoniae,Escherichia
-1145,"Klebsiella pneumoniae, Escherichia coli, MRSA",2BP-culture pos,Klebsiella pneumoniae,Klebsiella
-1145,"Klebsiella pneumoniae, Escherichia coli, MRSA",2BP-culture pos,MRSA,Staphylococcus
-1154,Klebsiella aerogenes,2BP-culture pos,Klebsiella aerogenes,Klebsiella
-1161,Pseudomonas,2BP-culture pos,Pseudomonas aeruginosa,Pseudomonas
-1172,Citrobacter koserii,2BP-culture pos,Citrobacter koseri,Citrobacter
-1196,Klebsiella pneumoniae,2BP-culture pos,Klebsiella pneumoniae,Klebsiella
-1204,MSSA,2BP-culture pos,Staphylococcus aureus,Staphylococcus
-1231,Escherichia coli,2BP-culture pos,Escherichia coli,Escherichia
-1233,Serratia marscescans,2BP-culture pos,Serratia marcescens,Serratia
-1236,Pseudomonas aeruginosa,2BP-culture pos,Pseudomonas aeruginosa,Pseudomonas
-1238,Streptococcus pneumoniae,2BP-culture pos,Streptococcus pneumoniae,Streptococcus
-1250,"Pseudomonas aeruginosa,  Klebsiella aerogenes",2BP-culture pos,Klebsiella aerogenes,Klebsiella
-1250,"Pseudomonas aeruginosa,  Klebsiella aerogenes",2BP-culture pos,Pseudomonas aeruginosa,Pseudomonas
-1254,MSSA,2BP-culture pos,Staphylococcus aureus,Staphylococcus
-1292,Escherichia coli,2BP-culture pos,Escherichia coli,Escherichia
-1357,Citrobacter koserii,2BP-culture pos,Citrobacter koseri,Citrobacter
-1410,MSSA,2BP-culture pos,Staphylococcus aureus,Staphylococcus
-1419,Klebsiella pneumoniae,2BP-culture pos,Klebsiella pneumoniae,Klebsiella
-1427,Klebsiella aerogenes,2BP-culture pos,Klebsiella aerogenes,Klebsiella
-1471,Staphylococcus aureus,2BP-culture pos,Staphylococcus aureus,Staphylococcus
-1473,MSSA,2BP-culture pos,Staphylococcus aureus,Staphylococcus
-1474,"MSSA, Haemophilus haemolyticus",2BP-culture pos,Haemophilus haemolyticus,Haemophilus
-1474,"MSSA, Haemophilus haemolyticus",2BP-culture pos,Staphylococcus aureus,Staphylococcus
-1499,MRSA,2BP-culture pos,Staphylococcus aureus,Staphylococcus
-1507,Acinetobacter haemolyticus,2BP-culture pos,Acinetobacter haemolyticus,Acinetobacter
-1521,MSSA,2BP-culture pos,Staphylococcus aureus,Staphylococcus
-1548,Pseudomonas aeruginosa,2BP-culture pos,Pseudomonas aeruginosa,Pseudomonas
+manuscript_id,patient_id,PNAOrg_all,PNAOrg_all_final,PNAOrg,TwoBP_Status,PNAOrg_genus
+3,1047,MSSA,Staphylococcus aureus,Staphylococcus aureus,2BP,Staphylococcus
+4,1051,Pseudomonas,Pseudomonas aeruginosa,Pseudomonas aeruginosa,2BP,Pseudomonas
+10,1114,Pseudomonas ,Pseudomonas aeruginosa,Pseudomonas aeruginosa,2BP,Pseudomonas
+12,1145,"E coli, Klebsiella, MRSA","Escherichia coli, Klebsiella pneumoniae, Staphyloccous aureus (MRSA)",Escherichia coli,2BP,Escherichia
+12,1145,"E coli, Klebsiella, MRSA","Escherichia coli, Klebsiella pneumoniae, Staphyloccous aureus (MRSA)",Klebsiella pneumoniae,2BP,Klebsiella
+12,1145,"E coli, Klebsiella, MRSA","Escherichia coli, Klebsiella pneumoniae, Staphyloccous aureus (MRSA)",Staphylococcus aureus,2BP,Staphylococcus
+13,1154,Klebsiella,Klebsiella aerogenes,Klebsiella aerogenes,2BP,Klebsiella
+16,1161,Pseudomonas,Pseudomonas aeruginosa,Pseudomonas aeruginosa,2BP,Pseudomonas
+18,1172,Citrobacter koseri,Citrobacter koseri,Citrobacter koseri,2BP,Citrobacter
+20,1196,Klebsiella,Klebsiella pneumoniae,Klebsiella pneumoniae,2BP,Klebsiella
+21,1204,MSSA,Staphylococcus aureus,Staphylococcus aureus,2BP,Staphylococcus
+23,1231,E coli ,Escherichia coli,Escherichia coli,2BP,Escherichia
+24,1233,Serratia,Serratia marcescens,Serratia marcescens,2BP,Serratia
+25,1236,Pseudomonas,Pseudomonas aeruginosa,Pseudomonas aeruginosa,2BP,Pseudomonas
+26,1238,Strep pneumo,Streptococcus pneumoniae,Streptococcus pneumoniae,2BP,Streptococcus
+29,1250,Pseudomonas and Klebsiella,"Pseudomonas aeruginosa, Klebsiella aerogenes ",Klebsiella aerogenes,2BP,Klebsiella
+29,1250,Pseudomonas and Klebsiella,"Pseudomonas aeruginosa, Klebsiella aerogenes ",Pseudomonas aeruginosa,2BP,Pseudomonas
+31,1254,MSSA,Staphylococcus aureus,Staphylococcus aureus,2BP,Staphylococcus
+34,1292,E coli,Escherichia coli,Escherichia coli,2BP,Escherichia
+36,1357,Citrobacter koserii,Citrobacter koseri,Citrobacter koseri,2BP,Citrobacter
+37,1410,MSSA,Staphylococcus aureus,Staphylococcus aureus,2BP,Staphylococcus
+38,1419,Klebsiella,Klebsiella pneumoniae,Klebsiella pneumoniae,2BP,Klebsiella
+39,1427,Klebsiella aerogenes,Klebsiella aerogenes,Klebsiella aerogenes,2BP,Klebsiella
+43,1471,S aureus,Staphylococcus aureus,Staphylococcus aureus,2BP,Staphylococcus
+44,1473,MSSA,Staphylococcus aureus,Staphylococcus aureus,2BP,Staphylococcus
+45,1474,MSSA and Haemophilus,"Staphylococcus aureus (MSSA), Haemophilus haemolyticus",Haemophilus haemolyticus,2BP,Haemophilus
+45,1474,MSSA and Haemophilus,"Staphylococcus aureus (MSSA), Haemophilus haemolyticus",Staphylococcus aureus,2BP,Staphylococcus
+48,1499,MRSA,Staphylococcus aureus,Staphylococcus aureus,2BP,Staphylococcus
+49,1507,Acinetobacter,Acinetobacter haemolyticus,Acinetobacter haemolyticus,2BP,Acinetobacter
+50,1521,MSSA,Staphylococcus aureus,Staphylococcus aureus,2BP,Staphylococcus
+55,1548,Pseudomonas,Pseudomonas aeruginosa,Pseudomonas aeruginosa,2BP,Pseudomonas

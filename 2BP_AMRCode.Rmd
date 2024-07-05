@@ -1,0 +1,1242 @@
+---
+title: "COVID-2BP"
+output: html_notebook
+date: July 23, 2023
+created by: Victoria Chu
+---
+
+# START
+
+```{r libraries}
+
+library(vegan)
+library(DESeq2)
+library(tidyverse)
+library(rstatix)
+
+```
+
+```{r clear data}
+
+#Clear existing data and graphics
+rm(list=ls())
+graphics.off()
+
+rename <- dplyr::rename
+
+```
+
+```{r theme}
+
+theme_mine <- function(base_size = 12, base_family = "") {
+  # Starts with theme_grey and then modify some parts
+  theme_bw(base_size = base_size, base_family = base_family) %+replace%
+    theme(
+      strip.background = element_blank(),
+      strip.text.x = element_text(size = 18),
+      strip.text.y = element_text(size = 18),
+      axis.text.x = element_text(size=14),
+      axis.text.y = element_text(size=14,hjust=1),
+      axis.ticks =  element_line(colour = "black"), 
+      axis.title.x= element_text(size=16),
+      axis.title.y= element_text(size=16,angle=90),
+      #legend.position = "none", 
+      panel.background = element_blank(), 
+      panel.border =element_blank(), 
+      panel.grid.major = element_blank(), 
+      panel.grid.minor = element_blank(), 
+      panel.margin = unit(1.0, "lines"), 
+      plot.background = element_blank(), 
+      plot.margin = unit(c(0.5,  0.5, 0.5, 0.5), "lines"),
+      axis.line = element_line(colour = "black")
+    )
+}
+
+theme_set(theme_mine())
+
+```
+
+# INPUT
+
+## Samples
+```{r Input - samples}
+NSsamples_long <- read.csv(".../Inputs_Final/NS_samples_longitudinal.csv")
+
+TAsamples_long <- read.csv(".../Inputs_Final/TA_samples_longitudinal.csv")
+
+TAsamples_time <- read.csv(".../Inputs_Final/TA_samples_timepoint.csv")
+
+NSsamples_time <- read.csv(".../Inputs_Final/NS_samples_timepoint.csv")
+
+newid <- read.csv(".../Inputs_Final/Patient_data_noPHI.csv") %>%
+  select(patient_id, manuscript_id)
+
+samples_long <- NSsamples_long %>% bind_rows(TAsamples_long)
+
+SC2viralload <- read.csv(".../Inputs_Final/TA_SARS2_rpm.csv") %>% select(sample_name, BetaCoV_nt_rpm, manuscript_id) %>%
+  mutate(BetaCoV_nt_rpm = ifelse(is.na(BetaCoV_nt_rpm), 0, BetaCoV_nt_rpm))
+
+TAbactmass <- read.csv(".../Inputs_Final/TA_samples_timepoint_bacterial_mass.csv") %>%
+  select(manuscript_id, bacterial_mass)
+
+steroids <- read.csv(".../Inputs_Final/Patient_data_noPHI.csv") %>%
+  mutate(steroids_yn = ifelse(Steroid_days_before_sample_collection!=0, 1, 0)) %>%
+  select(manuscript_id, steroids_yn, Steroid_days_before_sample_collection)
+  
+TAsamples_time <- TAsamples_time %>% left_join(SC2viralload, by=c("sample_name","manuscript_id")) %>% left_join(TAbactmass, by="manuscript_id") %>% left_join(steroids, by="manuscript_id")
+
+NSsamples_time <- NSsamples_time %>% left_join(SC2viralload, by=c("sample_name","manuscript_id")) %>% left_join(TAbactmass, by="manuscript_id") %>% left_join(steroids, by="manuscript_id")
+
+NSTAsamples_time <- TAsamples_time %>% bind_rows(NSsamples_time)
+
+```
+
+## Microbiome
+
+```{r Input - microbiome}
+
+#Read in all genus level data and filter out contaminants
+contaminants <- c("Sphingomonas", "Bradyrhizobium", "Ralstonia", "Delftia", 
+                  "Cutibacterium", "Methylobacterium", "Acidovorax", "Chryseobacterium", "Burkholderia")
+  
+genus_microbe_reports <- read.csv(".../Inputs_Final/Microbe_reports_genus.csv") %>%
+        filter(nt_rpm > 0.1 & nr_rpm > 0.1) %>%
+        filter(!name %in% contaminants)
+
+NSTAmicrobiome_time <- genus_microbe_reports %>%
+        filter(sample_name %in% NSTAsamples_time$sample_name) %>%
+        filter(category == "bacteria")
+
+TAmicrobiome_time <- genus_microbe_reports %>%
+        filter(sample_name %in% TAsamples_time$sample_name) %>%
+        filter(category == "bacteria") 
+
+TAmicrobiome_time <- TAmicrobiome_time %>% left_join(TAsamples_time %>% select(sample_name, TwoBP_Status, manuscript_id,  bacterial_mass, steroids_yn, BetaCoV_nt_rpm), by="sample_name")
+
+NSTAmicrobiome_time <- NSTAmicrobiome_time %>% left_join(NSTAsamples_time %>% select(sample_name, sample_type, TwoBP_Status, manuscript_id, bacterial_mass, steroids_yn, BetaCoV_nt_rpm), by="sample_name") %>%
+  mutate(sample_type = ifelse(sample_type=="Nasal Swab","NS","TA"))
+
+
+```
+
+
+## AMR
+```{r Input - AMR}
+
+all_COMET_AMR <- read.csv(".../Inputs_Final/amr_heatmap_values.csv")
+
+# Importing the gene names list
+gene_names<-read.csv(".../Inputs_Final/ARGANNOT_genelist.csv") %>%
+  rename(gene_name=GL_Gene,
+         abx_class=GL_Abxclass,
+         allele_name=GL_Allele)
+
+all_COMET_AMR <- all_COMET_AMR %>%
+  left_join(gene_names, by=c("gene_name","allele_name")) %>%
+  filter(coverage>=5 | depth>=5) %>%
+  filter(!(gene_name %in% c("PBP1a", "PBP1b", "TEM-1D"))) %>%
+  mutate(abx_class = case_when(abx_class %in% c("AGly","Gly") ~ "Aminoglycoside",
+                               abx_class=="Bla" ~ "Beta-Lactam",
+                               abx_class=="Fcyn" ~ "Fosfomycin",
+                               abx_class=="Flq" ~ "Fluoroquinolone",
+                               abx_class=="MLS" ~ "Macrolide",
+                               abx_class=="Phe" ~ "Chloramphenicol",
+                               abx_class=="Fcd" ~ "Fusidic acid",
+                               abx_class %in% c("Sul","Tmt") ~ "Trimethoprim-Sulfamethoxazole",
+                               abx_class=="Tet" ~ "Tetracycline",
+                               abx_class=="Colistin" ~ "Colistin",
+                               TRUE ~ abx_class))
+
+# All CTX-M samples are the highest of the CTX-Ms.
+CTX <- all_COMET_AMR %>% filter(grepl("CTX-M", gene_name)) %>% arrange(sample_name, desc(dpm)) %>%
+  group_by(sample_name) %>% slice_head() %>%
+  mutate(gene_name="CTX-M")
+
+# all Mcr-1 and one Mcr-3 samples are the highest of the Mcr.
+Mcr<- all_COMET_AMR %>% filter(grepl("Mcr", gene_name)) %>% arrange(sample_name, desc(dpm)) %>%
+  group_by(sample_name) %>% slice_head() 
+
+# All AmpC samples are the highest of the AmpC.
+AmpC <- all_COMET_AMR %>% filter(grepl("AmpC", gene_name)) %>% arrange(sample_name, desc(dpm)) %>%
+  group_by(sample_name) %>% slice_head() %>%
+  mutate(gene_name="AmpC")
+
+# All AmpH samples are the highest of the AmpH.
+AmpH <- all_COMET_AMR %>% filter(grepl("AMPH", toupper(gene_name))) %>% arrange(sample_name, desc(dpm)) %>%
+  group_by(sample_name) %>% slice_head() %>%
+  mutate(gene_name="AmpH")
+
+# All Mec samples are the highest of the Mec.
+Mec <- all_COMET_AMR %>% filter(grepl("MEC", toupper(gene_name))) %>% arrange(sample_name, desc(dpm)) %>%
+  group_by(sample_name) %>% slice_head()
+
+VAP_COMET_AMR <- all_COMET_AMR %>% filter(!(grepl("CTX", gene_name)) & !(grepl("Mcr", gene_name)) & !(grepl("AMPH", toupper(gene_name))) & !grepl("AmpC", gene_name) & !grepl("MEC", toupper(gene_name))) %>%
+  bind_rows(CTX, Mcr, AmpC, AmpH, Mec)
+
+TAamr_long <- VAP_COMET_AMR %>% filter(sample_name %in% TAsamples_long$sample_name)
+NSamr_long <- VAP_COMET_AMR %>% filter(sample_name %in% NSsamples_long$sample_name)
+amr_long <- TAamr_long %>% bind_rows(NSamr_long) %>% full_join(samples_long, by="sample_name")
+
+```
+
+```{r AMR genes of interest and PNA}
+
+amr_goi_list <- read.csv(".../Inputs_Final/AMR_genes_of_interest.csv")
+
+VAP_pathogen <-read.csv(".../Inputs_Final/2BP_CultureResults.csv") %>%
+  select(patient_id, PNAOrg_all, PNAOrg_all_final) %>%
+  distinct() %>%
+  mutate(PNA = case_when(patient_id==1145 ~ "Escherichia coli, Klebsiella pneumoniae,\nStaphyloccous aureus (MRSA)",
+                         PNAOrg_all %in% c("MSSA", "MRSA") ~ paste("Staphylococcus aureus (",PNAOrg_all,")", sep=""),
+                         patient_id==1250 ~ "Pseudomonas aeruginosa, Klebsiella aerogenes",
+                         patient_id==1474 ~ "Staphylococcus aureus (MSSA),\nHaemophilus haemolyticus",
+                         TRUE ~ PNAOrg_all_final))
+
+amr_long_goi <- amr_long %>% filter(gene_name %in% amr_goi_list$gene_name) %>%
+                left_join(VAP_pathogen, by="patient_id") %>%
+                filter(TwoBP_Status=="2BP")
+
+```
+
+
+# Figs - Beta diversity
+
+## Fig 2D: Beta diversity - Bray
+
+```{r microbiome beta-diversity - TA timepoint}
+
+beta_diversity_genes<- TAmicrobiome_time %>%
+  select(sample_name, name, nt_rpm)  %>%
+  pivot_wider(names_from = "name", values_from = nt_rpm) %>%
+  mutate_if(is.numeric, ~replace_na(., 0)) %>%
+  column_to_rownames("sample_name") %>%
+  log1p() # log transform the values, with adding 1-all
+
+beta_dist <- vegdist(beta_diversity_genes)
+
+AMR.dispersion<-betadisper(beta_dist, group=TAsamples_time$TwoBP_Status)
+AMR.permutest<-permutest(AMR.dispersion)
+
+plot(AMR.dispersion, hull=FALSE, ellipse=TRUE)
+
+set.seed(100)
+AMR.div<-adonis2(beta_dist~TwoBP_Status, data=TAsamples_time, permutations = 999, method="bray")
+print(AMR.div)
+
+MDS<-metaMDS(beta_diversity_genes, distance="bray", k=3, trymax=35, autotransform=TRUE) ##k is the number of dimensions
+MDS ##metaMDS takes eaither a distance matrix or your community matrix (then requires method for 'distance=')
+
+#stressplot(MDS)
+
+NMDS1 <- MDS$points[,1] ##also found using scores(birdMDS)
+NMDS2 <- MDS$points[,2]
+plot<-cbind(TAsamples_time, NMDS1, NMDS2)
+
+
+cent <- aggregate(cbind(NMDS1, NMDS2) ~ TwoBP_Status, data = TAsamples_time, FUN = mean)
+segs <- merge(plot, setNames(cent, c('TwoBP_Status','oNMDS1','oNMDS2')),
+              by = 'TwoBP_Status', sort = FALSE)
+
+
+#plot ordination
+NMDS_int<-ggplot(plot, aes(NMDS1, NMDS2, color=TwoBP_Status)) +
+  geom_point(size=2) + ##separates overlapping points
+  geom_segment(data = segs, mapping = aes(xend = oNMDS1, yend = oNMDS2, alpha=0.5)) + # spiders
+  geom_point(data = cent, size = 3) +                         # centroids
+  labs(color="") +
+  scale_color_manual(labels=c('No-BP','2BP'), values=c("#1A85FF","#D41159")) +
+  scale_fill_manual(labels=c('No-BP','2BP'), values=c("#1A85FF","#D41159")) +
+  annotate("text", x=0.2, y=-0.6, label="No-BP", hjust = 0, color=c("#1A85FF"), size=5) + 
+  annotate("text", x=-0.5, y=0.8, label="2BP", hjust = 0, color=c("#D41159"), size=5) + 
+  annotate("text", x=-1.7, y=-0.5, label=paste('PERMANOVA\np-value = 0.06'), hjust = 0, size=5) + 
+                theme(legend.position="none")
+
+NMDS_int
+
+
+```
+
+
+## Supp Fig 2: Jaccard
+
+```{r microbiome beta-diversity - TA timepoint Jaccard}
+
+beta_diversity_genes<- TAmicrobiome_time %>%
+  select(sample_name, name, nt_rpm)  %>%
+  pivot_wider(names_from = "name", values_from = nt_rpm) %>%
+  mutate_if(is.numeric, ~replace_na(., 0)) %>%
+  column_to_rownames("sample_name") %>%
+  log1p() # log transform the values, with adding 1-all
+
+beta_dist <- vegdist(beta_diversity_genes, method="jaccard")
+
+AMR.dispersion<-betadisper(beta_dist, group=TAsamples_time$TwoBP_Status)
+AMR.permutest<-permutest(AMR.dispersion)
+
+plot(AMR.dispersion, hull=FALSE, ellipse=TRUE)
+
+set.seed(100)
+AMR.div<-adonis2(beta_dist~TwoBP_Status, data=TAsamples_time, permutations = 999, method="jaccard")
+print(AMR.div)
+
+MDS<-metaMDS(beta_diversity_genes, distance="bray", k=3, trymax=35, autotransform=TRUE) ##k is the number of dimensions
+MDS ##metaMDS takes eaither a distance matrix or your community matrix (then requires method for 'distance=')
+
+#stressplot(MDS)
+
+NMDS1 <- MDS$points[,1] ##also found using scores(birdMDS)
+NMDS2 <- MDS$points[,2]
+plot<-cbind(TAsamples_time, NMDS1, NMDS2)
+
+
+cent <- aggregate(cbind(NMDS1, NMDS2) ~ TwoBP_Status, data = TAsamples_time, FUN = mean)
+segs <- merge(plot, setNames(cent, c('TwoBP_Status','oNMDS1','oNMDS2')),
+              by = 'TwoBP_Status', sort = FALSE)
+
+
+#plot ordination
+NMDS_int<-ggplot(plot, aes(NMDS1, NMDS2, color=TwoBP_Status)) +
+  geom_point(size=2) + ##separates overlapping points
+  geom_segment(data = segs, mapping = aes(xend = oNMDS1, yend = oNMDS2, alpha=0.5)) + # spiders
+  geom_point(data = cent, size = 3) +                         # centroids
+  labs(color="") +
+  scale_color_manual(labels=c('No-BP','2BP'), values=c("#1A85FF","#D41159")) +
+  scale_fill_manual(labels=c('No-BP','2BP'), values=c("#1A85FF","#D41159")) +
+  annotate("text", x=0.2, y=-0.6, label="No-BP", hjust = 0, color=c("#1A85FF"), size=5) + 
+  annotate("text", x=-0.5, y=0.8, label="2BP", hjust = 0, color=c("#D41159"), size=5) + 
+  annotate("text", x=-1.7, y=-0.5, label=paste('Jaccard PERMANOVA\np-value = 0.09'), hjust = 0, size=5) + 
+                theme(legend.position="none")
+
+NMDS_int
+
+
+```
+
+## Supp Fig 4A:  TA 2BP vs no BP - steroid by number of days
+
+```{r microbiome beta-diversity - TA timepoint adjusting for steroid days}
+
+beta_diversity_genes<- TAmicrobiome_time %>%
+  select(sample_name, name, nt_rpm)  %>%
+  pivot_wider(names_from = "name", values_from = nt_rpm) %>%
+  mutate_if(is.numeric, ~replace_na(., 0)) %>%
+  column_to_rownames("sample_name") %>%
+  log1p() # log transform the values, with adding 1-all
+
+beta_dist <- vegdist(beta_diversity_genes)
+
+AMR.dispersion<-betadisper(beta_dist, group=TAsamples_time$TwoBP_Status)
+AMR.permutest<-permutest(AMR.dispersion)
+
+plot(AMR.dispersion, hull=FALSE, ellipse=TRUE)
+
+set.seed(100)
+AMR.div<-adonis2(beta_dist~TwoBP_Status + Steroid_days_before_sample_collection, data=TAsamples_time, permutations = 999, method="bray")
+print(AMR.div)
+
+MDS<-metaMDS(beta_diversity_genes, distance="bray", k=3, trymax=35, autotransform=TRUE) ##k is the number of dimensions
+MDS ##metaMDS takes eaither a distance matrix or your community matrix (then requires method for 'distance=')
+
+#stressplot(MDS)
+
+NMDS1 <- MDS$points[,1] ##also found using scores(birdMDS)
+NMDS2 <- MDS$points[,2]
+plot<-cbind(TAsamples_time, NMDS1, NMDS2)
+
+
+cent <- aggregate(cbind(NMDS1, NMDS2) ~ TwoBP_Status, data = TAsamples_time, FUN = mean)
+segs <- merge(plot, setNames(cent, c('TwoBP_Status','oNMDS1','oNMDS2')),
+              by = 'TwoBP_Status', sort = FALSE)
+
+
+#plot ordination
+NMDS_int<-ggplot(plot, aes(NMDS1, NMDS2, color=TwoBP_Status)) +
+  geom_point(size=2) + ##separates overlapping points
+  geom_segment(data = segs, mapping = aes(xend = oNMDS1, yend = oNMDS2, alpha=0.5)) + # spiders
+  geom_point(data = cent, size = 3) +                         # centroids
+  labs(color="") +
+  scale_color_manual(labels=c('No-BP','2BP'), values=c("#1A85FF","#D41159")) +
+  scale_fill_manual(labels=c('No-BP','2BP'), values=c("#1A85FF","#D41159")) +
+  annotate("text", x=-0.4, y=-0.7, label="No-BP", hjust = 0, color=c("#1A85FF"), size=5) + 
+  annotate("text", x=0, y=0.8, label="2BP", hjust = 0, color=c("#D41159"), size=5) + 
+  annotate("text", x=-1.7, y=-0.6, label=paste('Bray-Curtis PERMANOVA\np-value = 0.06'), hjust = 0, size=4) + 
+                theme(legend.position="none")
+
+NMDS_int
+
+
+
+```
+
+
+
+
+## Supp Fig 4B:  TA 2BP vs no BP - Bray, by vent days
+
+```{r microbiome beta-diversity - TA timepoint adjusting for vent days}
+
+beta_diversity_genes<- TAmicrobiome_time %>%
+  select(sample_name, name, nt_rpm)  %>%
+  pivot_wider(names_from = "name", values_from = nt_rpm) %>%
+  mutate_if(is.numeric, ~replace_na(., 0)) %>%
+  column_to_rownames("sample_name") %>%
+  log1p() # log transform the values, with adding 1-all
+
+beta_dist <- vegdist(beta_diversity_genes)
+
+AMR.dispersion<-betadisper(beta_dist, group=TAsamples_time$TwoBP_Status)
+AMR.permutest<-permutest(AMR.dispersion)
+
+plot(AMR.dispersion, hull=FALSE, ellipse=TRUE)
+
+set.seed(100)
+AMR.div<-adonis2(beta_dist~TwoBP_Status + vent_to_sample, data=TAsamples_time, permutations = 999, method="bray")
+print(AMR.div)
+
+MDS<-metaMDS(beta_diversity_genes, distance="bray", k=3, trymax=35, autotransform=TRUE) ##k is the number of dimensions
+MDS ##metaMDS takes eaither a distance matrix or your community matrix (then requires method for 'distance=')
+
+#stressplot(MDS)
+
+NMDS1 <- MDS$points[,1] ##also found using scores(birdMDS)
+NMDS2 <- MDS$points[,2]
+plot<-cbind(TAsamples_time, NMDS1, NMDS2)
+
+
+cent <- aggregate(cbind(NMDS1, NMDS2) ~ TwoBP_Status, data = TAsamples_time, FUN = mean)
+segs <- merge(plot, setNames(cent, c('TwoBP_Status','oNMDS1','oNMDS2')),
+              by = 'TwoBP_Status', sort = FALSE)
+
+
+#plot ordination
+NMDS_int<-ggplot(plot, aes(NMDS1, NMDS2, color=TwoBP_Status)) +
+  geom_point(size=2) + ##separates overlapping points
+  geom_segment(data = segs, mapping = aes(xend = oNMDS1, yend = oNMDS2, alpha=0.5)) + # spiders
+  geom_point(data = cent, size = 3) +                         # centroids
+  labs(color="") +
+  scale_color_manual(labels=c('No-BP','2BP'), values=c("#1A85FF","#D41159")) +
+  scale_fill_manual(labels=c('No-BP','2BP'), values=c("#1A85FF","#D41159")) +
+  annotate("text", x=-0.4, y=-0.7, label="No-BP", hjust = 0, color=c("#1A85FF"), size=5) + 
+  annotate("text", x=0, y=0.8, label="2BP", hjust = 0, color=c("#D41159"), size=5) + 
+  annotate("text", x=-1.7, y=-0.6, label=paste('Bray-Curtis PERMANOVA\np-value = 0.07'), hjust = 0, size=4) + 
+                theme(legend.position="none")
+
+NMDS_int
+
+
+```
+
+## Supp Fig 4C: TA 2BP vs no BP - covariate SC2 viral load
+
+```{r microbiome beta-diversity - TA timepoint with SC2 viral load covariate}
+
+beta_diversity_genes<- TAmicrobiome_time %>%
+  select(sample_name, name, nt_rpm, BetaCoV_nt_rpm)  %>%
+  pivot_wider(names_from = "name", values_from = nt_rpm) %>%
+  mutate_if(is.numeric, ~replace_na(., 0)) %>%
+  column_to_rownames("sample_name") %>%
+  log1p() # log transform the values, with adding 1-all
+
+beta_dist <- vegdist(beta_diversity_genes)
+
+AMR.dispersion<-betadisper(beta_dist, group=TAsamples_time$TwoBP_Status)
+AMR.permutest<-permutest(AMR.dispersion)
+
+plot(AMR.dispersion, hull=FALSE, ellipse=TRUE)
+
+set.seed(100)
+AMR.div<-adonis2(beta_dist~TwoBP_Status + BetaCoV_nt_rpm, data=TAsamples_time, permutations = 999, method="bray")
+print(AMR.div)
+
+MDS<-metaMDS(beta_diversity_genes, distance="bray", k=3, trymax=35, autotransform=TRUE) ##k is the number of dimensions
+MDS ##metaMDS takes eaither a distance matrix or your community matrix (then requires method for 'distance=')
+
+#stressplot(MDS)
+
+NMDS1 <- MDS$points[,1] ##also found using scores(birdMDS)
+NMDS2 <- MDS$points[,2]
+plot<-cbind(TAsamples_time, NMDS1, NMDS2)
+
+
+cent <- aggregate(cbind(NMDS1, NMDS2) ~ TwoBP_Status, data = TAsamples_time, FUN = mean)
+segs <- merge(plot, setNames(cent, c('TwoBP_Status','oNMDS1','oNMDS2')),
+              by = 'TwoBP_Status', sort = FALSE)
+
+
+#plot ordination
+NMDS_int<-ggplot(plot, aes(NMDS1, NMDS2, color=TwoBP_Status)) +
+  geom_point(size=2) + ##separates overlapping points
+  geom_segment(data = segs, mapping = aes(xend = oNMDS1, yend = oNMDS2, alpha=0.5)) + # spiders
+  geom_point(data = cent, size = 3) +                         # centroids
+  labs(color="") +
+  scale_color_manual(labels=c('No-BP','2BP'), values=c("#1A85FF","#D41159")) +
+  scale_fill_manual(labels=c('No-BP','2BP'), values=c("#1A85FF","#D41159")) +
+  annotate("text", x=0.2, y=-0.6, label="No-BP", hjust = 0, color=c("#1A85FF"), size=5) + 
+  annotate("text", x=-0.5, y=0.8, label="2BP", hjust = 0, color=c("#D41159"), size=5) + 
+  annotate("text", x=-1.7, y=-0.5, label=paste('Bray-Curtis PERMANOVA\nadjusted p-value = 0.08'), hjust = 0, size=4) + 
+                theme(legend.position="none")
+
+NMDS_int
+
+```
+
+
+
+## Supp Fig 4D:  TA 2BP vs no BP - Bray, covariate bacterial bacterial_mass
+
+```{r microbiome beta-diversity - TA timepoint with bacterial bacterial_mass covariate}
+
+
+beta_diversity_genes<- TAmicrobiome_time %>%
+  select(sample_name, name, nt_rpm, bacterial_mass)  %>%
+  pivot_wider(names_from = "name", values_from = nt_rpm) %>%
+  mutate_if(is.numeric, ~replace_na(., 0)) %>%
+  column_to_rownames("sample_name") %>%
+  log1p() # log transform the values, with adding 1-all
+
+beta_dist <- vegdist(beta_diversity_genes)
+
+AMR.dispersion<-betadisper(beta_dist, group=TAsamples_time$TwoBP_Status)
+AMR.permutest<-permutest(AMR.dispersion)
+
+plot(AMR.dispersion, hull=FALSE, ellipse=TRUE)
+
+set.seed(100)
+AMR.div<-adonis2(beta_dist~TwoBP_Status + bacterial_mass, data=TAsamples_time, permutations = 999, method="bray")
+print(AMR.div)
+
+MDS<-metaMDS(beta_diversity_genes, distance="bray", k=3, trymax=35, autotransform=TRUE) ##k is the number of dimensions
+MDS ##metaMDS takes eaither a distance matrix or your community matrix (then requires method for 'distance=')
+
+#stressplot(MDS)
+
+NMDS1 <- MDS$points[,1] ##also found using scores(birdMDS)
+NMDS2 <- MDS$points[,2]
+plot<-cbind(TAsamples_time, NMDS1, NMDS2)
+
+
+cent <- aggregate(cbind(NMDS1, NMDS2) ~ TwoBP_Status, data = TAsamples_time, FUN = mean)
+segs <- merge(plot, setNames(cent, c('TwoBP_Status','oNMDS1','oNMDS2')),
+              by = 'TwoBP_Status', sort = FALSE)
+
+
+#plot ordination
+NMDS_int<-ggplot(plot, aes(NMDS1, NMDS2, color=TwoBP_Status)) +
+  geom_point(size=2) + ##separates overlapping points
+  geom_segment(data = segs, mapping = aes(xend = oNMDS1, yend = oNMDS2, alpha=0.5)) + # spiders
+  geom_point(data = cent, size = 3) +                         # centroids
+  labs(color="") +
+  scale_color_manual(labels=c('No-BP','2BP'), values=c("#1A85FF","#D41159")) +
+  scale_fill_manual(labels=c('No-BP','2BP'), values=c("#1A85FF","#D41159")) +
+  annotate("text", x=-0.5, y=0.8, label="No-BP", hjust = 0, color=c("#1A85FF"), size=5) + 
+  annotate("text", x=-0.5, y=-0.15, label="2BP", hjust = 0, color=c("#D41159"), size=5) + 
+  annotate("text", x=-1.7, y=-1, label=paste('Bray-Curtis PERMANOVA\nadjusted p-value = 0.07'), hjust = 0, size=4) + 
+                theme(legend.position="none")
+
+NMDS_int
+
+```
+
+
+
+## Supp Fig 15A: 2BP NS vs TA
+
+```{r microbiome beta-diversity - 2BP NS vs TA}
+
+samples_2BP <- NSTAsamples_time %>% filter(TwoBP_Status=="2BP")
+microbiome_2BP <- NSTAmicrobiome_time %>% filter(TwoBP_Status=="2BP")
+
+beta_diversity_genes<- microbiome_2BP %>%
+  select(sample_name, name, nt_rpm)  %>%
+  pivot_wider(names_from = "name", values_from = nt_rpm) %>%
+  mutate_if(is.numeric, ~replace_na(., 0)) %>%
+  column_to_rownames("sample_name") %>%
+  log1p() # log transform the values, with adding 1-all
+
+beta_dist <- vegdist(beta_diversity_genes)
+
+AMR.dispersion<-betadisper(beta_dist, group=samples_2BP$sample_type)
+AMR.permutest<-permutest(AMR.dispersion)
+
+plot(AMR.dispersion, hull=FALSE, ellipse=TRUE)
+
+set.seed(100)
+AMR.div<-adonis2(beta_dist~sample_type, data=samples_2BP, permutations = 999, method="bray", strata = samples_2BP$manuscript_id)
+print(AMR.div)
+
+MDS<-metaMDS(beta_diversity_genes, distance="bray", k=3, trymax=35, autotransform=TRUE) ##k is the number of dimensions
+MDS ##metaMDS takes eaither a distance matrix or your community matrix (then requires method for 'distance=')
+
+#stressplot(MDS)
+
+NMDS1 <- MDS$points[,1] ##also found using scores(birdMDS)
+NMDS2 <- MDS$points[,2]
+plot<-cbind(samples_2BP, NMDS1, NMDS2)
+
+
+cent <- aggregate(cbind(NMDS1, NMDS2) ~ sample_type, data = samples_2BP, FUN = mean)
+segs <- merge(plot, setNames(cent, c('sample_type','oNMDS1','oNMDS2')),
+              by = 'sample_type', sort = FALSE)
+
+#plot ordination
+NMDS_int<-ggplot(plot %>% mutate(sample_type=factor(sample_type, levels=c("Nasal Swab","TA"))), aes(NMDS1, NMDS2, color=sample_type)) +
+  geom_point(size=2) + ##separates overlapping points
+  geom_segment(data = segs, mapping = aes(xend = oNMDS1, yend = oNMDS2, alpha=0.5)) + # spiders
+  geom_point(data = cent, size = 3) +                         # centroids
+  labs(color="") +
+  scale_color_manual(labels=c('Nasal Swab','TA'), values=c("mediumpurple","#D41159")) +
+  scale_fill_manual(labels=c('Nasal Swab','TA'), values=c("mediumpurple","#D41159")) +
+  annotate("text", x=0.2, y=-0.6, label="NS", hjust = 0, color=c("mediumpurple"), size=5) + 
+  annotate("text", x=0, y=0.5, label="TA", hjust = 0, color=c("#D41159"), size=5) + 
+  annotate("text", x=-1.7, y=-1, label=paste('Bray-Curtis PERMANOVA\np-value = 0.37'), hjust = 0, size=4) + 
+                theme(legend.position="none")
+
+NMDS_int
+
+
+```
+
+
+## Supp Fig 15B: 2BP NS vs TA
+
+```{r microbiome beta-diversity - NoBP NS vs TA}
+
+samples_NoBP <- NSTAsamples_time %>% filter(TwoBP_Status=="No-BP")
+microbiome_NoBP <- NSTAmicrobiome_time %>% filter(TwoBP_Status=="No-BP")
+
+beta_diversity_genes<- microbiome_NoBP %>%
+  select(sample_name, name, nt_rpm)  %>%
+  pivot_wider(names_from = "name", values_from = nt_rpm) %>%
+  mutate_if(is.numeric, ~replace_na(., 0)) %>%
+  column_to_rownames("sample_name") %>%
+  log1p() # log transform the values, with adding 1-all
+
+beta_dist <- vegdist(beta_diversity_genes)
+
+AMR.dispersion<-betadisper(beta_dist, group=samples_NoBP$sample_type)
+AMR.permutest<-permutest(AMR.dispersion)
+
+plot(AMR.dispersion, hull=FALSE, ellipse=TRUE)
+
+set.seed(100)
+AMR.div<-adonis2(beta_dist~sample_type, data=samples_NoBP, permutations = 999, method="bray", strata = samples_NoBP$manuscript_id)
+print(AMR.div)
+
+MDS<-metaMDS(beta_diversity_genes, distance="bray", k=3, trymax=35, autotransform=TRUE) ##k is the number of dimensions
+MDS ##metaMDS takes eaither a distance matrix or your community matrix (then requires method for 'distance=')
+
+#stressplot(MDS)
+
+NMDS1 <- MDS$points[,1] ##also found using scores(birdMDS)
+NMDS2 <- MDS$points[,2]
+plot<-cbind(samples_NoBP, NMDS1, NMDS2)
+
+
+cent <- aggregate(cbind(NMDS1, NMDS2) ~ sample_type, data = samples_NoBP, FUN = mean)
+segs <- merge(plot, setNames(cent, c('sample_type','oNMDS1','oNMDS2')),
+              by = 'sample_type', sort = FALSE)
+
+
+#plot ordination
+NMDS_int<-ggplot(plot %>% mutate(sample_type=factor(sample_type, levels=c("Nasal Swab","TA"))), aes(NMDS1, NMDS2, color=sample_type)) +
+  geom_point(size=2) + ##separates overlapping points
+  geom_segment(data = segs, mapping = aes(xend = oNMDS1, yend = oNMDS2, alpha=0.5)) + # spiders
+  geom_point(data = cent, size = 3) +                         # centroids
+  labs(color="") +
+  scale_color_manual(labels=c('Nasal Swab','TA'), values=c("mediumpurple","#D41159")) +
+  scale_fill_manual(labels=c('Nasal Swab','TA'), values=c("mediumpurple","#D41159")) +
+  annotate("text", x=0.4, y=-0.05, label="NS", hjust = 0, color=c("mediumpurple"), size=5) + 
+  annotate("text", x=-0.05, y=0.3, label="TA", hjust = 0, color=c("#D41159"), size=5) + 
+  annotate("text", x=-1, y=-0.8, label=paste('Bray-Curtis PERMANOVA\np-value = 0.10'), hjust = 0, size=4) + 
+                theme(legend.position="none")
+
+NMDS_int
+
+
+```
+
+
+# Figs - Differential abundance
+
+## Fig 2H: No BP vs 2BP TA
+
+```{r No BP vs 2BP tracheal aspirates}
+
+#building countData matrix
+counts <- TAmicrobiome_time %>%
+  filter(category=="bacteria") %>%
+  group_by(sample_name, genus_tax_id) %>%
+  summarise(sum_nt_count = sum(nt_count)) %>%
+  pivot_wider(id_cols=genus_tax_id, names_from=sample_name, values_from=sum_nt_count) %>%
+  mutate(name=as.character(genus_tax_id)) %>%
+  column_to_rownames("name") %>%
+  select(-genus_tax_id) %>%
+  mutate_if(is.numeric, ~replace_na(., 0))
+
+counts_dds <- counts[, sort(colnames(counts))]
+hist(rowSums(counts_dds!=0)/ncol(counts_dds))
+
+# counting the number of 0s per row and keeping microbes that are in at least 30% of all samples (or the number of 0s is >= 0.8*number of samples)
+counts_dds <- counts_dds[rowSums(counts_dds==0) < (0.7*(ncol(counts_dds))), ]
+
+counts_dds_matrix = as.matrix(counts_dds)
+
+metadata_dds <- TAsamples_time %>% select(sample_name, TwoBP_Status) %>%
+  column_to_rownames("sample_name")
+metadata_dds <- metadata_dds %>% arrange(row.names(.))
+
+all(rownames(metadata_dds) == colnames(counts_dds_matrix)) #this needs to be True!!! otherwise you will have mismatches
+
+#building DESeq object
+dds = DESeqDataSetFromMatrix(countData = counts_dds_matrix,
+                              colData = metadata_dds,
+                              design = ~TwoBP_Status)
+
+c=counts(dds)[rowSums(counts(dds))>0,]
+hist(log(rowSums(c)),breaks=200,freq=FALSE)
+
+dds=dds[rowSums(counts(dds))>=1,]
+dds$TwoBP_Status = relevel(dds$TwoBP_Status, ref = "No-BP")
+dds=dds[,colSums(counts(dds))>=1]
+
+ds <- estimateSizeFactors(dds, type="poscounts")
+ds <- DESeq(ds, test="Wald", fitType="parametric")
+
+# Extract differential expression results
+alpha = 0.05 
+res = results(ds, alpha=alpha)
+res = res[order(res$padj, na.last=NA), ]
+res_df = as.data.frame(res)
+
+sig.res <- res[res$padj<0.05,]
+taxa_sig = rownames(res[1:20, ]) # select bottom 20 with lowest p.adj values
+
+#hist(sig.res$log2FoldChange)
+
+#Determining genus names
+genus_names <- TAmicrobiome_time %>% select(genus_tax_id, name) %>% filter(genus_tax_id %in% rownames(sig.res)) %>% distinct() %>% rename(Genus=genus_tax_id)
+
+sig.res_df <- as(sig.res, "data.frame") %>% rownames_to_column("Genus") %>%
+  mutate(Genus = as.integer(Genus)) %>%
+  left_join(genus_names, by="Genus")
+
+diff_abundance <- ggplot(sig.res_df %>% mutate(color=case_when(log2FoldChange>=0 ~ "positive",
+                                                                log2FoldChange<0 ~ "negative")),
+                          aes(x=reorder(name,log2FoldChange), y=log2FoldChange, fill=color)) +
+  geom_bar(stat="identity", position="stack") + 
+  annotate("text", x=13.2, y=0.5, label= "Increased in 2BP", color=c("#7c1730"), hjust=0, size=5) +
+  annotate("segment", 
+        x=12.75, xend=12.75, 
+        y= 0.5, yend= 3.5, 
+        arrow=arrow(type = "closed", length = unit(0.02, "npc")), color = "#7c1730") +
+    annotate("text", x=13.2, y=-0.5, label= "Increased in No BP", color=c("#004058"), hjust=1, size=5) +
+  annotate("segment", 
+        x=12.75, xend=12.75, 
+        y= -0.5, yend= -3.5, 
+        arrow=arrow(type = "closed", length = unit(0.02, "npc")), color = "#004058") +
+  scale_fill_manual(values=c("#004058","#7c1730")) +
+  coord_flip(xlim=c(1, 12), clip="off") +
+  theme(legend.position = "none",
+        plot.margin = margin(2, 2, 2, 2),
+        axis.text.y = element_text(face = "italic")) +
+  xlab("") + ylab("\nLog2 Fold Change") +
+  labs(title = "Differential expression of 2BP vs No BP in TAs\n \n")
+
+diff_abundance
+
+```
+
+
+## Supp Fig 5: No BP vs 2BP TA, steroids only
+
+```{r No BP vs 2BP tracheal aspirates among steroid recipients only}
+
+TAmicrobiome_time_steroids <- TAmicrobiome_time %>% filter(steroids_yn==1)
+TAsamples_time_steroids <- TAsamples_time %>% filter(steroids_yn==1)
+
+#building countData matrix
+counts <- TAmicrobiome_time_steroids %>%
+  filter(category=="bacteria") %>%
+  group_by(sample_name, genus_tax_id) %>%
+  summarise(sum_nt_count = sum(nt_count)) %>%
+  pivot_wider(id_cols=genus_tax_id, names_from=sample_name, values_from=sum_nt_count) %>%
+  mutate(name=as.character(genus_tax_id)) %>%
+  column_to_rownames("name") %>%
+  select(-genus_tax_id) %>%
+  mutate_if(is.numeric, ~replace_na(., 0))
+
+counts_dds <- counts[, sort(colnames(counts))]
+hist(rowSums(counts_dds!=0)/ncol(counts_dds))
+
+# counting the number of 0s per row and keeping microbes that are in at least 30% of all samples (or the number of 0s is >= 0.8*number of samples)
+counts_dds <- counts_dds[rowSums(counts_dds==0) < (0.7*(ncol(counts_dds))), ]
+
+counts_dds_matrix = as.matrix(counts_dds)
+
+metadata_dds <- TAsamples_time_steroids %>% select(sample_name, TwoBP_Status) %>%
+  column_to_rownames("sample_name")
+metadata_dds <- metadata_dds %>% arrange(row.names(.))
+
+all(rownames(metadata_dds) == colnames(counts_dds_matrix)) #this needs to be True!!! otherwise you will have mismatches
+
+#building DESeq object
+dds = DESeqDataSetFromMatrix(countData = counts_dds_matrix,
+                              colData = metadata_dds,
+                              design = ~TwoBP_Status)
+
+c=counts(dds)[rowSums(counts(dds))>0,]
+hist(log(rowSums(c)),breaks=200,freq=FALSE)
+
+dds=dds[rowSums(counts(dds))>=1,]
+dds$TwoBP_Status = relevel(dds$TwoBP_Status, ref = "No-BP")
+dds=dds[,colSums(counts(dds))>=1]
+
+ds <- estimateSizeFactors(dds, type="poscounts")
+ds <- DESeq(ds, test="Wald", fitType="parametric")
+
+# Extract differential expression results
+alpha = 0.05 
+res = results(ds, alpha=alpha)
+res = res[order(res$padj, na.last=NA), ]
+res_df = as.data.frame(res)
+
+sig.res <- res[res$padj<0.05,]
+taxa_sig = rownames(res[1:20, ]) # select bottom 20 with lowest p.adj values
+
+#hist(sig.res$log2FoldChange)
+
+#Determining genus names
+genus_names <- TAmicrobiome_time_steroids %>% select(genus_tax_id, name) %>% filter(genus_tax_id %in% rownames(sig.res)) %>% distinct() %>% rename(Genus=genus_tax_id)
+
+sig.res_df <- as(sig.res, "data.frame") %>% rownames_to_column("Genus") %>%
+  mutate(Genus = as.integer(Genus)) %>%
+  left_join(genus_names, by="Genus")
+
+diff_abundance <- ggplot(sig.res_df %>% mutate(color=case_when(log2FoldChange>=0 ~ "positive",
+                                                                log2FoldChange<0 ~ "negative")),
+                          aes(x=reorder(name,log2FoldChange), y=log2FoldChange, fill=color)) +
+  geom_bar(stat="identity", position="stack") + 
+  annotate("text", x=9, y=0.5, label= "Increased in 2BP", color=c("#7c1730"), hjust=0, size=5) +
+  annotate("segment", 
+        x=8.75, xend=8.75, 
+        y= 0.5, yend= 3.5, 
+        arrow=arrow(type = "closed", length = unit(0.02, "npc")), color = "#7c1730") +
+    annotate("text", x=9, y=-0.5, label= "Increased in No BP", color=c("#004058"), hjust=1, size=5) +
+  annotate("segment", 
+        x=8.75, xend=8.75, 
+        y= -0.5, yend= -3.5, 
+        arrow=arrow(type = "closed", length = unit(0.02, "npc")), color = "#004058") +
+  scale_fill_manual(values=c("#004058","#7c1730")) +
+  coord_flip(xlim=c(1, 8), clip="off") +
+  theme(legend.position = "none",
+        plot.margin = margin(2, 2, 2, 2),
+        axis.text.y = element_text(face = "italic")) +
+  xlab("") + ylab("\nLog2 Fold Change") +
+  labs(title = "Differential expression of 2BP vs No BP in TAs (steroid recipients only)\n\n")
+
+diff_abundance
+
+
+```
+
+
+
+
+# Fig 4D: Stacked proportional bar plot
+
+```{r stacked bar plot data}
+
+paired <- NSTAmicrobiome_time %>% select(manuscript_id, sample_name) %>% distinct() %>%
+  group_by(manuscript_id) %>% reframe(count=n()) %>% filter(count==2)
+
+NSTAmicrobiome_paired <- NSTAmicrobiome_time %>% filter(manuscript_id %in% paired$manuscript_id)
+
+# more than 0.5% of the total abundance of all samples
+sample_abundance <- NSTAmicrobiome_paired %>% group_by(sample_name) %>% reframe(tot_ntrpm = sum(nt_rpm)) 
+
+total_abundance <- NSTAmicrobiome_paired %>% group_by(name) %>% reframe(name_sum = sum(nt_rpm)) %>%
+  mutate(prop_ntrpm = name_sum/sum(NSTAmicrobiome_paired$nt_rpm)*100) %>%
+  arrange(desc(prop_ntrpm)) %>%
+  mutate(name = case_when(prop_ntrpm>=0.5 ~ name,
+                           prop_ntrpm<0.5 & !(name %in% c("Citrobacter","Acinetobacter")) ~ "Other",
+                          TRUE ~ name)) %>%
+  filter(name!="Other")
+
+
+barplot_data <- NSTAmicrobiome_paired %>%
+  select(manuscript_id, sample_name, TwoBP_Status, name, sample_type, nt_rpm) %>%
+  mutate(name = ifelse(name %in% total_abundance$name, name, "Other")) %>%
+  group_by(manuscript_id, sample_name, name) %>%
+  reframe(new_sum=sum(nt_rpm), across()) %>%
+  select(-nt_rpm) %>% distinct() %>%
+  left_join(sample_abundance, by= "sample_name") %>%
+  mutate(prop = new_sum/tot_ntrpm *100)
+
+```
+
+```{r Spearman correlation}
+
+#correlation between proportional abundance of ALL microbes, or with some designated as other?
+#calculate spearman correlation for each paired sample
+
+corrtest_data <- barplot_data %>%
+  group_by(manuscript_id) %>%
+  mutate(newnum = cur_group_id())
+
+correlation_test <- function(r){
+  df<-corrtest_data %>% filter(newnum==r) %>%
+    select(name, new_sum, sample_type) %>%
+    pivot_wider(names_from=sample_type, values_from=new_sum) %>%
+    replace_na(list(NS=0, TA=0))
+  rho <- cor.test(df$NS, df$TA, method = "spearman")
+  rho$estimate
+}
+
+rho_df <- data.frame(newnum=1, rho=correlation_test(1))
+
+for (i in 2:length(unique(corrtest_data$newnum))) {
+ rho_df <- rho_df %>% bind_rows(data.frame(newnum=i, rho=correlation_test(i))) 
+}
+
+rho_df <- rho_df %>% left_join(corrtest_data %>% select(newnum, manuscript_id, TwoBP_Status) %>% distinct(), by="newnum") %>% select(-newnum)
+
+# summarizing the Spearman's rho by TwoBP_Status category
+rho_df %>% group_by(TwoBP_Status) %>% reframe(rho_median=median(rho), q1 = quantile(rho, 0.25), q3 = quantile(rho, 0.75))
+
+
+```
+
+```{r stacked bar plot ggplot}
+
+
+microbe_factor <- c("Acinetobacter", "Citrobacter", "Escherichia","Haemophilus", "Klebsiella", "Pseudomonas", "Staphylococcus", "Streptococcus",
+"Alloprevotella", "Bacteroides","Campylobacter","Capnocytophaga",  "Corynebacterium","Dolosigranulum", "Enterococcus", "Fannyhessea", "Fusobacterium", "Lactobacillus","Mycoplasma", "Neisseria", "Peptoniphilus","Porphyromonas", "Prevotella",  "Serratia", "Veillonella",  
+ "Other")
+
+pathogens <- c("Acinetobacter", "Citrobacter", "Escherichia","Haemophilus", "Klebsiella", "Pseudomonas", "Staphylococcus", "Streptococcus")
+
+microbe_colors <- c("#43051C","#67082B","#8d0b3b","#b00e4a","#D41159","#f1568f","#f79ebf","#fcd5e3",
+                   "#011060","#011993","#01419a","#016da0","#016da0","#019ba7","#01ad8c","#01b464","#01ba38","#01c109","#61ce00","#9ad400","#d7da00","#ddbf00","#e1ab00","#ae8400","#7b5d00","#808080")
+
+full <- ggplot(barplot_data %>% mutate(name = factor(name, levels=microbe_factor)),
+       aes(x=sample_type, y=prop, fill=name)) +
+  scale_fill_manual(values = microbe_colors) +
+  geom_bar(position="fill", stat="identity") +
+  facet_wrap(TwoBP_Status~manuscript_id, scales = "free_x", nrow=2) + 
+  theme(strip.background = element_blank(),
+    strip.text = element_text(size = 10),
+    panel.spacing = unit(0.5, "lines"),
+    axis.title.y = element_blank())
+
+
+check<-barplot_data %>% mutate(name = factor(name, levels=microbe_factor)) %>% filter(TwoBP_Status=="No-BP")
+
+noBP <- ggplot(barplot_data %>% mutate(name = factor(name, levels=microbe_factor)) %>% filter(TwoBP_Status=="No-BP"),
+       aes(x=sample_type, y=prop, fill=name)) +
+  scale_y_continuous(breaks = seq(0, 1, by = 0.2), expand = c(0, 0)) +
+  scale_fill_manual(values = microbe_colors) +
+  geom_bar(position="fill", stat="identity") +
+  facet_wrap(.~manuscript_id, scales = "free_x", nrow=1) + 
+  theme_minimal() +
+  xlab("") +
+  theme(strip.background = element_blank(),
+    panel.spacing = unit(0.5, "lines"),
+    axis.line = element_line(),
+    axis.ticks = element_line(),#strip.text = element_text(size = 1),
+    axis.title.y = element_blank(),
+    legend.position="none")
+
+
+secBP <- ggplot(barplot_data %>% mutate(name = factor(name, levels=microbe_factor)) %>% filter(TwoBP_Status=="2BP"),
+       aes(x=sample_type, y=prop, fill=name)) +
+  scale_y_continuous(breaks = seq(0, 1, by = 0.2), expand = c(0, 0)) +
+  scale_fill_manual(values = microbe_colors) +
+  geom_bar(position="fill", stat="identity") +
+  facet_wrap(.~manuscript_id, scales = "free_x", nrow=1) + 
+  theme_minimal() +
+  xlab("") +
+  theme(strip.background = element_blank(),
+    panel.spacing = unit(0.5, "lines"),
+    axis.line = element_line(),
+    axis.ticks = element_line(),#strip.text = element_text(size = 1),
+    axis.title.y = element_blank(),
+    legend.position="none")
+
+```
+
+
+# AMR Heatmaps
+## Fig 5: All NS and TA heatmap
+
+```{r aggregate NS and TA heatmap}
+
+heatmap_data_all <- amr_long %>% 
+  filter(TwoBP_Status=="2BP" & !is.na(gene_name)) %>%
+  select(manuscript_id, sample_type, gene_name, abx_class) %>%
+  distinct()
+
+sample_num <- samples_long %>% filter(TwoBP_Status=="2BP") %>% group_by(manuscript_id, sample_type) %>% summarise(samp_num = n())
+
+amr_num <- amr_long %>% 
+  filter(TwoBP_Status=="2BP" & !is.na(gene_name)) %>%
+  select(sample_name, manuscript_id, sample_type, gene_name) %>% 
+  distinct() %>%
+  group_by(manuscript_id, sample_type, gene_name) %>%
+  summarise(amr_num = n())
+
+samples <- sample_num %>% full_join(amr_num, by=c("manuscript_id","sample_type")) %>%
+  mutate(amr_perc = (amr_num/samp_num) *100)
+
+heatmap_data_all <- heatmap_data_all %>% full_join(samples, by=c("manuscript_id","sample_type", "gene_name"))
+
+heatmap_num_AMR <- heatmap_data_all %>%
+  filter(sample_type=="TA") %>%
+  mutate(count=case_when(is.na(gene_name) ~ 0,
+                         !is.na(gene_name) ~ 1)) %>%
+  group_by(manuscript_id) %>%
+  summarise(num_AMR=sum(count)) %>% 
+  arrange(desc(num_AMR)) %>%
+  mutate(order=row_number())
+
+group <- heatmap_data_all %>% select(manuscript_id, sample_type) %>%
+  distinct() %>% group_by(manuscript_id) %>% arrange(sample_type) %>% slice_head() %>%
+  mutate(group = case_when(sample_type=="Nasal Swab" ~ "Paired TA and NS",
+                            TRUE ~ "TA only")) %>%
+  select(-sample_type)
+
+heatmap_data_all2 <- heatmap_data_all %>%
+  left_join(heatmap_num_AMR, by="manuscript_id") %>%
+  left_join(group, by="manuscript_id") %>%
+  mutate(sample_type2 = case_when(sample_type=="Nasal Swab" ~ "NS", TRUE ~ sample_type)) %>%
+  mutate(sample = paste(manuscript_id, sample_type2),
+         gene_name = fct_rev(gene_name))
+
+heatmap <- ggplot(heatmap_data_all2 %>%
+                    mutate(sample_type2 = factor(sample_type2, levels=c("TA","NS")),
+                           order = case_when(sample_type=="TA" ~ 1,
+                                             sample_type=="NS" ~ 2),
+                           abx_class = ifelse(is.na(abx_class), "No genes detected", abx_class)) %>%
+                    mutate(abx_class = ifelse(abx_class=="Macrolide", "Macrolide/\nLincosamide\nStreptogramin", abx_class)) %>%
+                    mutate(abx_class = factor(abx_class, levels=c("Aminoglycoside", "Beta-Lactam", "Chloramphenicol", "Colistin", "Fluoroquinolone", "Fosfomycin", "Macrolide/\nLincosamide\nStreptogramin", "Tetracycline", "Trimethoprim-Sulfamethoxazole", "No genes detected"))),
+                  aes(x = reorder(sample_type2, order), y = gene_name, fill = abx_class)) + 
+  geom_tile(aes(alpha=amr_perc)) +
+  labs(fill= "ARG class") +
+  scale_x_discrete(position = "top") +
+  scale_alpha_continuous(range=c(0.3, 1)) +
+  facet_grid(abx_class ~ group + manuscript_id, scales = "free", space="free", switch="x", labeller = labeller(group = function(x) {rep("", length(x))})) +
+  xlab("Patients with 2BP\n") + ylab("AMR gene\n") +
+  guides(fill="none") +
+  labs(alpha = "Samples with the AMR gene (%)") +
+  theme(legend.position="bottom",
+        strip.placement = "outside",
+        axis.text.x = element_text(size=8, angle=90), axis.ticks.x = element_blank(),
+        axis.ticks.y = element_blank(),
+        axis.text.y = element_text(size=8),
+        panel.background = element_rect(fill = "grey95", color = NA),
+        panel.border = element_blank(),
+        strip.text.y = element_text(size = 10, hjust=0),
+        strip.text.x = element_text(size = 10, hjust=1, angle=90),
+        plot.caption = element_text(hjust=1),
+        panel.spacing.x=unit(0.2, "lines"),panel.spacing.y=unit(0.1, "lines"),
+        axis.title.x = element_text(size=10),
+        axis.title.y = element_text(size=10))
+
+
+heatmap
+
+```
+
+## Supp Fig 17: Pseudomonas specific heatmap
+
+
+```{r pseudomonas TA heatmap}
+
+heatmap_data_all <- amr_long %>% 
+  filter(manuscript_id %in% c(10, 16, 25, 29, 4, 55) & !is.na(gene_name)) %>%
+  filter(sample_type=="TA") %>%
+  select(manuscript_id, sample_type, gene_name, abx_class) %>%
+  distinct()
+
+sample_num <- samples_long %>% filter(manuscript_id %in% c(4, 10, 16, 25, 29, 55)) %>%
+  filter(sample_type=="TA") %>%
+  group_by(manuscript_id, sample_type) %>% summarise(samp_num = n())
+
+amr_num <- amr_long %>% 
+  filter(manuscript_id %in% c(4, 10, 16, 25, 29, 55) & !is.na(gene_name)) %>%
+  filter(sample_type=="TA") %>%
+  select(sample_name, manuscript_id, sample_type, gene_name) %>% 
+  distinct() %>%
+  group_by(manuscript_id, sample_type, gene_name) %>%
+  summarise(amr_num = n())
+
+samples <- sample_num %>% full_join(amr_num, by=c("manuscript_id","sample_type")) %>%
+  mutate(amr_perc = (amr_num/samp_num) *100)
+
+heatmap_data_all <- heatmap_data_all %>% full_join(samples, by=c("manuscript_id","sample_type", "gene_name"))
+
+heatmap_num_AMR <- heatmap_data_all %>%
+  mutate(count=case_when(is.na(gene_name) ~ 0,
+                         !is.na(gene_name) ~ 1)) %>%
+  group_by(manuscript_id) %>%
+  summarise(num_AMR=sum(count)) %>% 
+  arrange(desc(num_AMR)) %>%
+  mutate(order=row_number())
+
+heatmap <- ggplot(heatmap_data_all,
+                  aes(x = as.character(manuscript_id), y = fct_rev(reorder(gene_name,gene_name)), fill = abx_class)) + 
+  geom_tile() +
+  labs(fill= "ARG class") +
+  facet_grid(abx_class ~ ., scales = "free", space="free", switch="x", labeller = labeller(group = function(x) {rep("", length(x))})) +
+  xlab("\nPatients with Pseudomonas 2BP") + ylab("AMR gene\n") +
+  guides(fill="none") +
+  labs(alpha = "Samples with the AMR gene (%)") +
+  theme(legend.position="bottom",
+        axis.text.x = element_text(size=8, angle=90), axis.ticks.x = element_blank(),
+        axis.ticks.y = element_blank(),
+        axis.text.y = element_text(size=8),
+        panel.border = element_rect(fill=NA),
+        strip.text.y = element_text(size = 10, hjust=0),
+        strip.text.x = element_text(size = 10, hjust=1, angle=90),
+        plot.caption = element_text(hjust=1),
+        panel.spacing.x=unit(0.2, "lines"), panel.spacing.y=unit(0.1, "lines"),
+        axis.title.x = element_text(size=10),
+        axis.title.y = element_text(size=10))
+
+
+heatmap
+
+
+```
+
+# Supp Fig 16: Timeline AMR
+
+```{r goi plot}
+
+plot_data <- amr_long_goi %>%
+  select(sample_name, manuscript_id, patient_id, gene_name, PNA, sample_type, sample_to_2BP) %>%
+  distinct()
+
+samples_w_AMR <- plot_data %>% select(sample_name) %>% distinct()
+
+samples_wo_AMR <- samples_long %>% filter(TwoBP_Status=="2BP") %>%
+  select(sample_name, manuscript_id, patient_id, sample_type, sample_to_2BP) %>%
+  filter(!(sample_name %in% samples_w_AMR$sample_name)) %>%
+                left_join(VAP_pathogen, by="patient_id")
+  
+plot_data_all <- plot_data %>% bind_rows(samples_wo_AMR) %>%
+  mutate(PNA = case_when(patient_id == 1250 ~ "Pseudomonas aeruginosa,\nKlebsiella aerogenes",
+                         TRUE ~ PNA)) %>%
+  mutate(gram_cat = case_when(patient_id %in% c(1236, 1161, 1233, 1507, 1154, 1427, 1419, 1051, 1114, 1172, 1231, 1196, 1250, 1292, 1357, 1548) ~ "gram_neg",
+                              patient_id %in% c(1254, 1410, 1471, 1473, 1204, 1238, 1521, 1499, 1047) ~ "gram_pos",
+                              patient_id %in% c(1474, 1145) ~ "both"),
+         facet_label = paste(manuscript_id,": ",PNA, sep=""))
+
+plot_data_all <- plot_data_all %>%
+  mutate(gram_cat=factor(gram_cat, levels=c("gram_pos","gram_neg","both"))) %>%
+  mutate(show = case_when(gram_cat=="gram_pos" & gene_name %in% c("BlaZ", "MEC", "MECA") ~ "Yes",
+                          gram_cat=="gram_neg" & !(gene_name %in% c("BlaZ", "MEC", "MECA")) ~ "Yes",
+                          gram_cat=="both" ~ "Yes",
+                          TRUE ~ "No")) %>%
+  mutate(gene_name=case_when(show=="Yes" ~ gene_name,
+                             show=="No" ~ NA_character_)) %>%
+  select(sample_name, manuscript_id, gram_cat, PNA, facet_label, gene_name, sample_type, sample_to_2BP) %>%
+  distinct()
+
+```
+
+
+```{r GNR goi plot}
+
+
+plot_GNR <- ggplot(plot_data_all %>% filter(gram_cat=="gram_neg") %>%
+                     mutate(),
+               aes(x=gene_name, y=sample_to_2BP, color=sample_type)) + coord_flip() +
+  facet_wrap( ~ facet_label, scales = "free", ncol=4) +
+  geom_point(position=position_dodge(width=0.75)) +
+  geom_line(position=position_dodge(width=0.75)) +
+  geom_hline(yintercept = 0, linetype="solid", color="red") +
+  geom_vline(xintercept = 1.5, linetype="solid", color = "black") +
+  geom_point(data = . %>% select(facet_label, gram_cat, sample_name, sample_to_2BP, sample_type) %>% distinct(),
+             aes(x="samples", y=sample_to_2BP, color=sample_type), shape=8, position = position_dodge(width=0.75)) +
+  scale_x_discrete(limits = c("samples",
+                              "Mcr1","Mcr3","Qnr-S",
+                              "SED-1","RAHN-1","OXY","OXA-50","OXA-1",
+                              "MAL-CKO","FONA-1","CTX-M","AmpC","ACT-MIR")) +
+  scale_y_continuous(expand = c(0, 0), limits = c(-8, 8), breaks = seq(-6,6, by=2)) +
+  scale_color_manual(label=c("Nasal Swab", "TA"), values = c("mediumpurple", "#D41159")) +  
+  guides(color = guide_legend(reverse = TRUE)) +
+  theme_bw() +
+  theme(legend.position = "top",
+        axis.text.y = element_text(size=8), strip.text.x = element_text(size = 6),
+        axis.title = element_blank()) +
+  labs(color="Specimen sample")
+
+plot_GNR
+
+
+```
+
+
+
+```{r GPC goi plot}
+
+
+plot_GPC <- ggplot(plot_data_all %>% filter(gram_cat=="gram_pos"),
+               aes(x=gene_name, y=sample_to_2BP, color=sample_type)) + coord_flip() +
+  facet_wrap( ~ facet_label, scales = "free", ncol=4) +
+  geom_point(position=position_dodge(width=0.75)) +
+  geom_line(position=position_dodge(width=0.75)) +
+  geom_hline(yintercept = 0, linetype="solid", color="red") +
+  geom_vline(xintercept = 1.5, linetype="solid", color = "black") +
+  geom_point(data = . %>% select(facet_label, gram_cat, sample_name, sample_to_2BP, sample_type) %>% distinct(),
+             aes(x="samples", y=sample_to_2BP, color=sample_type), shape=8, position = position_dodge(width=0.75)) +
+  scale_x_discrete(limits = c("samples",
+                              "MECA","BlaZ")) +
+  scale_y_continuous(expand = c(0, 0), limits = c(-8, 8), breaks = seq(-6,6, by=2)) +
+  scale_color_manual(label=c("Nasal Swab", "TA"), values = c("mediumpurple", "#D41159")) +  
+  guides(color = guide_legend(reverse = TRUE)) +
+  theme_bw() +
+  theme(legend.position = "top",
+        axis.text.y = element_text(size=8), strip.text.x = element_text(size = 6),
+        axis.title = element_blank()) +
+  labs(color="Specimen sample")
+
+plot_GPC
+
+```
+
+
+
+```{r both goi plot}
+
+
+plot_both <- ggplot(plot_data_all %>% filter(gram_cat=="both") %>%
+                      mutate(facet_label = ifelse(facet_label=="12: Escherichia coli, Klebsiella pneumoniae,\nStaphyloccous aureus (MRSA)","12: Escherichia coli, Klebsiella\npneumoniae, MRSA", facet_label)),
+               aes(x=gene_name, y=sample_to_2BP, color=sample_type)) + coord_flip() +
+  facet_wrap( ~ facet_label, scales = "free", ncol=4) +
+  geom_point(position=position_dodge(width=0.75)) +
+  geom_line(position=position_dodge(width=0.75)) +
+  geom_hline(yintercept = 0, linetype="solid", color="red") +
+  geom_vline(xintercept = 13.5, linetype="dashed", color = "grey") +
+  geom_vline(xintercept = 1.5, linetype="solid", color = "black") +
+  geom_point(data = . %>% select(facet_label, gram_cat, sample_name, sample_to_2BP, sample_type) %>% distinct(),
+             aes(x="samples", y=sample_to_2BP, color=sample_type), shape=8, position = position_dodge(width=0.75)) +
+  scale_x_discrete(limits = c("samples",
+                              "Mcr1","Mcr3","Qnr-S",
+                              "SED-1","RAHN-1","OXY","OXA-50","OXA-1",
+                              "MAL-CKO","FONA-1","CTX-M","AmpC","ACT-MIR",
+                              "MECA","BlaZ")) +
+  scale_y_continuous(expand = c(0, 0), limits = c(-8, 8), breaks = seq(-6,6, by=2)) +
+  scale_color_manual(label=c("Nasal Swab", "TA"), values = c("mediumpurple", "#D41159")) +  
+  guides(color = guide_legend(reverse = TRUE)) +
+  theme_bw() +
+  theme(legend.position = "top",
+        axis.text.y = element_text(size=8), strip.text.x = element_text(size = 6),
+        axis.title = element_blank()) +
+  labs(color="Specimen sample")
+
+plot_both
+
+
+```
+
