@@ -44,7 +44,7 @@ This repository contains the code for the paper **Microbial Dynamics and Pulmona
 
 ## Code usage
 
-The full data sets are available in the folder [Inputs_Final](Inputs_Final). To reproduce the results in the paper, the uploaded codes could be run directly. The codes' output are located in the folder [Output_Finals](Output_Finals).
+The full data sets are available in the folder [Inputs_Final](Inputs_Final). To reproduce the results in the paper, the uploaded codes could be run directly. The codes' output are located in the folder [Outputs_Final](Outputs_Final).
 
 ## Figures
 
